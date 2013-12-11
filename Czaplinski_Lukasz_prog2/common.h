@@ -2,9 +2,8 @@
 
 #define COMMON_H
 
-#define _XOPEN_SOURCE 500
-#define _BSD_SOURCE
-#define _GNU_SOURCE
+#define _XOPEN_SOURCE
+#include <time.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <errno.h>
@@ -15,9 +14,6 @@
 #include <sys/types.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
-#include <signal.h>
-#include <pwd.h>
-#include <grp.h>
 
 #define CERRS(X,Y) { if(X) { perror(Y); } }
 
