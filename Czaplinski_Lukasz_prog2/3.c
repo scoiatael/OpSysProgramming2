@@ -11,7 +11,7 @@ typedef struct barrier {
 #define CERRR(X,Y) {CERR(X,Y); if(X == -1) return -1; }
 barrier_t* binit(unsigned int count)
 {
-  int fd = shm_open(NAME, O_CREAT | O_TRUNC, 999);
+  int fd = shm_open(NAME, O_CREAT | O_TRUNC, S_IRWXU);
   CERR(fd, "shm_open failed");
   barrier_t *mem = (barrier_t*) mmap(NULL, sizeof(barrier_t), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
   CERR((long long)mem, "mmap failed");

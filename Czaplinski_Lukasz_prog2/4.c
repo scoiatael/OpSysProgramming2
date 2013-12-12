@@ -7,21 +7,28 @@ typedef struct cs
 
 int cs_wait(cs_t* q)
 {
-  char b;
-  CERR(mq_receive(q->queue, &b, 1, NULL), "receive failed");
+  char b[256];
+  CERR(mq_receive(q->queue, b, 256, NULL), "receive failed");
   return 0;
 }
 
 int cs_post(cs_t* q)
 {
-  CERR(mq_send(q->queue, "a", 0, 100), "send failed");
+  CERR(mq_send(q->queue, "a", 1, 100), "send failed");
   return 0;
 }
 
 cs_t *cs_open(const char* name, unsigned val)
 {
   cs_t* ob = (cs_t*) malloc(sizeof(cs_t));
-  ob->queue = mq_open(name, O_RDWR | O_CREAT,644,NULL);
+  ob->queue = mq_open(name, O_RDWR | O_CREAT , S_IRWXU, NULL);
+  struct mq_attr attr;
+  mq_getattr(ob->queue, &attr);
+  attr.mq_msgsize=32L;
+  attr.mq_flags=0L;
+  attr.mq_curmsgs=0L;
+  mq_unlink(name);
+  ob->queue = mq_open(name, O_RDWR | O_CREAT , S_IRWXU, &attr);
   CERR((long long)ob->queue, "mq open failed");
   if(ob->queue == (mqd_t)-1) {
     exit(EXIT_FAILURE);
@@ -67,34 +74,36 @@ int main(void)
   char buf[256];
   sprintf(buf, "/mmqcsPid%d", getpid());
   cs_t* qu = cs_open(buf, n);
-  struct info in;
-  in.q = qu;
+  struct info in[3*n];
   pthread_attr_t pattr;
   CERRS(pthread_attr_init(&pattr), "pthread attr init failed");
   CERRS(pthread_attr_setdetachstate(&pattr, PTHREAD_CREATE_JOINABLE), "pthread attr setds failed");
   pthread_t p[3*n];
   memset(p, 0, sizeof(p));
   for (int i = 0; i < n; i++) {
+    in[i].q = qu;
     if(rand() % 2 == 0) {
       printf("made poster\n");
       val = val + 1;
-      in.type = 0;
+      in[i].type = 0;
     } else {
       printf("made receiver\n");
       val = val - 1;
-      in.type = 1;
+      in[i].type = 1;
     }
-    CERRS(0 != pthread_create(&p[i], &pattr, &routine, &in), "pthread create failed");
+    CERRS(0 != pthread_create(&p[i], &pattr, &routine, &in[i]), "pthread create failed");
   }
   for (int i = 0; i > val; i = i-1) {
     printf("made poster\n");
-    in.type = 0;
-    CERRS(0 != pthread_create(&p[i+n], &pattr, &routine, &in), "pthread create failed");
+    in[n+i].type = 0;
+    in[n+i].q = qu;
+    CERRS(0 != pthread_create(&p[i+n], &pattr, &routine, &in[n+i]), "pthread create failed");
   }
   for (int i = 0; i < val; i ++) {
     printf("made receiver\n");
-    in.type = 1;
-    CERRS(0 != pthread_create(&p[i+2*n], &pattr, &routine, &in), "pthread create failed");
+    in[2*n+i].type = 1;
+    in[2*n+i].q = qu;
+    CERRS(0 != pthread_create(&p[i+2*n], &pattr, &routine, &in[2*n+i]), "pthread create failed");
   }
   for (int i = 0; i < 3*n; i++) {
     if(p[i] != 0) {
