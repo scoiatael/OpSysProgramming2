@@ -39,7 +39,6 @@ struct thInfo {
   pthread_mutex_t wSem; // to control reading/writing
   int readerNr; // to count readers
   pthread_mutex_t rSem; // to control access to reader count
-  pthread_mutex_t r2Sem; // make readers queue after writers
   int readerMaxWait;
   pthread_mutex_t rmSem;
   int writerMaxWait;
@@ -57,22 +56,15 @@ void writeIfHigher(int val, int* where, pthread_mutex_t* sem)
 
 void Writer(struct thInfo* t)
 {
-  CERRS(pthread_mutex_lock(&t->r2Sem) != 0, "r2Sem lock failed");
-
   CERRS(pthread_mutex_lock(&t->wSem) != 0, "wSem lock failed");
 
   delay(100,10);
 
   CERRS(pthread_mutex_unlock(&t->wSem) != 0, "wSem unlock failed");
-
-  CERRS(pthread_mutex_unlock(&t->r2Sem) != 0, "r2Sem lock failed");
 }
 
 void Reader(struct thInfo* t)
 {
-  CERRS(pthread_mutex_lock(&t->r2Sem) != 0, "r2Sem lock failed");
-  CERRS(pthread_mutex_unlock(&t->r2Sem) != 0, "r2Sem lock failed");
-
   CERRS(pthread_mutex_lock(&t->rSem) != 0, "rSem lock failed");
   (t->readerNr)++;
   if(t->readerNr == 1) {
@@ -131,7 +123,6 @@ int main(int argc, char* const argv[])
   CERRS(pthread_mutex_init(&thinfo.wSem,NULL) != 0, "sem init failed");
   CERRS(pthread_mutex_init(&thinfo.rmSem,NULL) != 0, "sem init failed");
   CERRS(pthread_mutex_init(&thinfo.wmSem,NULL) != 0, "sem init failed");
-  CERRS(pthread_mutex_init(&thinfo.r2Sem,NULL) != 0, "sem init failed");
   pthread_t threads[n];
   pthread_attr_t pattr;
   CERRS(pthread_attr_init(&pattr), "pthread attr init failed");
@@ -158,7 +149,6 @@ int main(int argc, char* const argv[])
   pthread_mutex_destroy(&thinfo.wSem);
   pthread_mutex_destroy(&thinfo.rmSem);
   pthread_mutex_destroy(&thinfo.wmSem);
-  pthread_mutex_destroy(&thinfo.r2Sem);
   printf(" max Reader wait time: %d\n max Writer wait time: %d\n", thinfo.readerMaxWait, thinfo.writerMaxWait);
   return 0;
 }
