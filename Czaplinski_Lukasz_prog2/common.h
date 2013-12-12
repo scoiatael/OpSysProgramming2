@@ -2,7 +2,9 @@
 
 #define COMMON_H
 
-#define _XOPEN_SOURCE
+#define _XOPEN_SOURCE 500
+#define _BSD_SOURCE
+#define _GNU_SOURCE
 #define _POSIX_C_SOURCE 199309L
 #include <time.h>
 #include <sys/time.h>
