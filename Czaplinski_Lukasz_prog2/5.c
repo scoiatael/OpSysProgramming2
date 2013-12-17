@@ -77,79 +77,89 @@ void setThInfo(struct thInfo* i, struct thInfoPersist* p)
   i->persist = p;
 }
 
-void Producer(struct thInfo* t)
+int Producer(struct thInfoPersist* t, void (*action)(void*), void* arg)
 {
-  int am = getAmount(&t->flags);
-  setAmount(&t->flags, 1);
-  for(; am > 0; am = am - 1) {
-    CERR(pthread_mutex_lock(&t->persist->buffer) != 0, "mutex lock failed");
-    while(t->persist->itemCount > t->persist->maxItems - getAmount(&t->flags)) { 
-    //  /*
-      if(cCount * RATIO < pCount) { 
-        fprintf(stderr,"[+]");
-        fflush(stderr);
-        CERR(pthread_mutex_unlock(&t->persist->buffer) != 0, "mutex unlock failed");
-        return; 
-      }
-   //   */
-      fprintf(stderr, "\n P%u : itemCount: %d maxItems: %d, left %d, C%d P%d)\n", (unsigned int)pthread_self(), t->persist->itemCount, t->persist->maxItems, am, cCount, pCount);
-      CERR(pthread_cond_broadcast(&t->persist->notEmpty), "broadcast failed");
-      struct timespec ts;
-      clock_gettime(CLOCK_REALTIME, &ts);
-      ts.tv_sec+=5;
-      pthread_cond_timedwait(&t->persist->notFull, &t->persist->buffer, &ts);
-    }
-
-    //Produce
-    delay(100,10);
-    t->persist->itemCount = t->persist->itemCount + getAmount(&t->flags);
-    fprintf(stderr,"+");
-    fflush(stderr);
-
-    if(am == 1) {
-      fprintf(stderr,"$(%d)", pCount);
+  CERR(pthread_mutex_lock(&t->buffer) != 0, "mutex lock failed");
+  while(t->itemCount > t->maxItems - 1) { 
+  //  /*
+    if(cCount * RATIO < pCount) { 
+      fprintf(stderr,"[+]");
       fflush(stderr);
+      CERR(pthread_mutex_unlock(&t->buffer) != 0, "mutex unlock failed");
+      return -1; 
     }
+ //   */
+    fprintf(stderr, "\n P%u : itemCount: %d maxItems: %d, C%d P%d)\n", (unsigned int)pthread_self(), t->itemCount, t->maxItems, cCount, pCount);
+    CERR(pthread_cond_broadcast(&t->notEmpty), "broadcast failed");
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_sec+=5;
+    pthread_cond_timedwait(&t->notFull, &t->buffer, &ts);
+  }
 
-    CERR(pthread_cond_broadcast(&t->persist->notEmpty), "broadcast failed");
-    CERR(pthread_mutex_unlock(&t->persist->buffer) != 0, "mutex unlock failed");
+  (*action)(arg);
+
+  CERR(pthread_cond_broadcast(&t->notEmpty), "broadcast failed");
+  CERR(pthread_mutex_unlock(&t->buffer) != 0, "mutex unlock failed");
+  return 0;
+}
+
+int Consumer(struct thInfoPersist* t, void (*action)(void*), void* arg)
+{
+  CERR(pthread_mutex_lock(&t->buffer) != 0, "mutex lock failed");
+  while(t->itemCount < 1) { 
+      if(pCount * RATIO < cCount) {
+      fprintf(stderr,"[-]");
+      fflush(stderr);
+      CERR(pthread_mutex_unlock(&t->buffer) != 0, "mutex unlock failed");
+      return -1;
+    }
+    fprintf(stderr, "\n C%u : itemCount: %d maxItems: %d, C%d P%d \n", (unsigned int)pthread_self(), t->itemCount, t->maxItems, cCount, pCount);
+    CERR(pthread_cond_broadcast(&t->notFull), "broadcast failed");
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_sec+=5;
+    pthread_cond_timedwait(&t->notEmpty, &t->buffer, &ts);
+  }
+
+  (*action)(arg);
+
+  CERR(pthread_cond_broadcast(&t->notFull), "broadcast failed");
+  CERR(pthread_mutex_unlock(&t->buffer) != 0, "mutex unlock failed");
+  return 0;
+}
+
+void ConsumerAction(void* info)
+{
+  struct thInfo* thinfo = (struct thInfo*) info;
+  //Consume
+  delay(100,10);
+  thinfo->persist->itemCount = thinfo->persist->itemCount - 1;
+  fprintf(stderr,"-");
+  fflush(stderr);
+  
+  setAmount(&thinfo->flags, getAmount(&thinfo->flags) - 1);
+
+  if(getAmount(&thinfo->flags) == 0) {
+    fprintf(stderr,"&(%d)", cCount);
+    fflush(stderr);
   }
 }
 
-void Consumer(struct thInfo* t)
+void ProducerAction(void* info)
 {
-  int am = getAmount(&t->flags);
-  setAmount(&t->flags, 1);
-  for(; am > 0; am = am - 1) {
-    CERR(pthread_mutex_lock(&t->persist->buffer) != 0, "mutex lock failed");
-    while(t->persist->itemCount < getAmount(&t->flags)) { 
-        if(pCount * RATIO < cCount) {
-        fprintf(stderr,"[-]");
-        fflush(stderr);
-        CERR(pthread_mutex_unlock(&t->persist->buffer) != 0, "mutex unlock failed");
-        return;
-      }
-      fprintf(stderr, "\n C%u : itemCount: %d maxItems: %d, left %d, C%d P%d \n", (unsigned int)pthread_self(), t->persist->itemCount, t->persist->maxItems, am, cCount, pCount);
-      CERR(pthread_cond_broadcast(&t->persist->notFull), "broadcast failed");
-      struct timespec ts;
-      clock_gettime(CLOCK_REALTIME, &ts);
-      ts.tv_sec+=5;
-      pthread_cond_timedwait(&t->persist->notEmpty, &t->persist->buffer, &ts);
-    }
+  struct thInfo* thinfo = (struct thInfo*) info;
+  //Produce
+  delay(100,10);
+  thinfo->persist->itemCount = thinfo->persist->itemCount + 1;
+  fprintf(stderr,"+");
+  fflush(stderr);
 
-    //Consume
-    delay(100,10);
-    t->persist->itemCount = t->persist->itemCount - getAmount(&t->flags);
-    fprintf(stderr,"-");
+  setAmount(&thinfo->flags, getAmount(&thinfo->flags) - 1);
+
+  if(getAmount(&thinfo->flags) == 0) {
+    fprintf(stderr,"$(%d)", pCount);
     fflush(stderr);
-
-    if(am == 1) {
-      fprintf(stderr,"&(%d)", cCount);
-      fflush(stderr);
-    }
-
-    CERR(pthread_cond_broadcast(&t->persist->notFull), "broadcast failed");
-    CERR(pthread_mutex_unlock(&t->persist->buffer) != 0, "mutex unlock failed");
   }
 }
 
@@ -158,12 +168,14 @@ void* routine(void* info)
   struct thInfo* thinfo = (struct thInfo*) info;
   if(isConsumer(&thinfo->flags)) {
     CriticalAdd(&cCountLock, &cCount, 1);
-    Consumer(thinfo);
+    int r=0;
+    while(r == 0 && getAmount(&thinfo->flags) > 0 ) { r = Consumer(thinfo->persist, ConsumerAction, thinfo); }
     CriticalAdd(&cCountLock, &cCount, -1);
   }
   if(isProducer(&thinfo->flags)) {
     CriticalAdd(&pCountLock, &pCount, 1);
-    Producer(thinfo);
+    int r=0;
+    while(r == 0 && getAmount(&thinfo->flags) > 0 ) { r = Producer(thinfo->persist, ProducerAction, thinfo); }
     CriticalAdd(&pCountLock, &pCount, -1);
   }
   return NULL;
