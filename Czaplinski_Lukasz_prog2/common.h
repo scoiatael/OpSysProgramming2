@@ -23,6 +23,7 @@
 #include <semaphore.h>
 #include <fcntl.h>
 #include <mqueue.h>
+#include <sys/socket.h>
 
 #define CERRS(X,Y) { if(X) { perror(Y); } }
 
