@@ -1,5 +1,5 @@
 #include "common.h"
-#define DEBUG
+//#define DEBUG
 
 typedef struct barrier {
   sem_t sem;
@@ -7,12 +7,24 @@ typedef struct barrier {
   int cur_val;
   pthread_mutex_t valSem;
   char name[256];
+  char released;
 } barrier_t;
 
 barrier_t* b;
 pid_t* children;
 int n;
 
+
+void sem_unlock(sem_t* t)
+{
+  int r=0;
+  do {
+    fprintf(stderr, ".");
+    fflush(stderr);
+    sem_getvalue(t, &r);
+    sem_post(t);
+  } while(r == 0);
+}
 #define MAX(X,Y) ((X>Y) ? X : Y)
 
 int openSharedMem(const char* name, int* fd, char* existed)
@@ -72,13 +84,57 @@ barrier_t* binit(unsigned int count)
   mem->val = count;
   mem->cur_val = 0;
   strcpy(mem->name, NAME);
-  CERR(pthread_mutex_init(&mem->valSem,NULL), "mutex init failed");
+  pthread_mutexattr_t p;
+  CERR(pthread_mutexattr_init(&p), "attr init");
+  CERR(pthread_mutexattr_setpshared(&p, PTHREAD_PROCESS_SHARED), "attr set");
+  CERR(pthread_mutex_init(&mem->valSem, &p), "mutex init failed");
   CERR(sem_init(&mem->sem, 1, 0), "sem init failed");
+  mem->released = (char) 1 < 0;
   return mem;
 }
 
 int bwait(barrier_t* b)
 {
+  //printf("  bwait..\n");
+
+  //printf(" %d on release..\n", getpid());
+  while(b->released) {
+    //sem_wait(&b->sem);
+    usleep(100);
+  }
+
+  pthread_mutex_lock(&b->valSem);
+  b->cur_val++;
+  pthread_mutex_unlock(&b->valSem);
+
+  //printf("   barrier val: %d, needed %d (%d)\n", b->cur_val, b->val, getpid());
+
+  if(b->cur_val == b->val) {
+   // printf("..opening.. (%d)\n", getpid());
+    b->released = 1 > 0;
+  //  sem_unlock(&b->sem);
+  } else {
+    //printf(" %d on not release..\n", getpid());
+    while(!b->released) {
+      //sem_wait(&b->sem);
+      usleep(100);
+    }
+  }
+
+  //sem_unlock(&b->sem);
+
+  pthread_mutex_lock(&b->valSem);
+  b->cur_val = b->cur_val - 1;
+  pthread_mutex_unlock(&b->valSem);
+  
+  if(b->cur_val == 0) {
+    b->released = 1 < 0;
+    //sem_unlock(&b->sem);
+  }
+
+  return 0;
+
+  /*
   printf("  bwait..\n");
   CERR(pthread_mutex_lock(&b->valSem), "sem wait failed");
   b->cur_val++;
@@ -95,20 +151,12 @@ int bwait(barrier_t* b)
   } else {
     CERR(pthread_mutex_unlock(&b->valSem), "sem post failed");
     //potential race: cur_val takes into account this thread, but it's not currently waiting
+    //using semaphore should fix it, as it counts posts
     CERR(sem_wait(&b->sem), "sem wait failed");
+    printf(" done waiting..\n");
   }
   return 0;
-}
-
-void sem_unlock(sem_t* t)
-{
-  int r=0;
-  do {
-    fprintf(stderr, ".");
-    fflush(stderr);
-    sem_getvalue(t, &r);
-    sem_post(t);
-  } while(r == 0);
+  */
 }
 
 int bdestroy(barrier_t* b)
@@ -124,7 +172,7 @@ int bdestroy(barrier_t* b)
 
 void printPid(int sig __attribute__((unused)))
 {
-  fprintf(stderr, "pid %d closing\n", getpid()); 
+  fprintf(stderr, "-->pid %d closing\n", getpid()); 
   _exit(EXIT_FAILURE);
 }
 
@@ -208,7 +256,6 @@ int main(int argc, char* const argv[])
     pid_t pid = getpid();
     signal(SIGINT, &printPid);
     for (int i = 0; i < m; i++) {
-      printf("pid %d starting %d run..\n", pid,i);
       bwait(b);
       delay(1000,10);
       printf(" pid %d run %d\n", pid, i);

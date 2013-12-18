@@ -33,12 +33,15 @@
 
 #define DIFF(X,Y) { struct timeval t1,t2; gettimeofday(&t1,NULL); X; gettimeofday(&t2,NULL); Y=timediff(t1,t2);}
 
+#define otM (1000000000)
 void delay(int r, int m)
 {
   struct timespec nSleepTime;
   memset(&nSleepTime, 0, sizeof(struct timespec));
-  nSleepTime.tv_nsec = rand() % (r-m) + m;
-  nanosleep(&nSleepTime, &nSleepTime);
+  int t = rand() % (r-m) + m;
+  nSleepTime.tv_nsec = t % otM;
+  nSleepTime.tv_sec = t / otM; 
+  CERR(nanosleep(&nSleepTime, &nSleepTime), "nanosleep");
 }
 
 #endif /* end of include guard: COMMON_H */
