@@ -101,7 +101,7 @@ int mpclose(int f)
 int main(int argc, const char *argv[])
 {
   if(argc < 3 ) {
-    printf("Usage: ./3 { -r | -w <string> } <command>");
+    printf("Usage: ./1 { -r | -w <string> } <command>");
     return EXIT_FAILURE;
   }
   int fd;

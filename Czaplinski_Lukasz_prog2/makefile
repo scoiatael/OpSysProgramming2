@@ -1,7 +1,7 @@
 CC=gcc
 CFLAGS=-std=gnu99 -Wall -Wextra -pedantic -Werror
 LFLAGS=-lpthread -lrt
-EXC=1 2 2St 3 4 5 6 7 8 9 10
+EXC=1 2 3 4 5 6 7 8
 TRASH=*.o $(EXC) .depend
 
 all: .depend $(EXC)

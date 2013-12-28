@@ -1,30 +1,150 @@
 #include "common.h"
 //#define DEBUG
 
-typedef struct barrier {
+typedef struct queue {
+  pthread_mutex_t prot;
+  int count;
   sem_t sem;
-  int val;
-  int cur_val;
-  pthread_mutex_t valSem;
+} queue_t;
+
+int qinit(queue_t* q)
+{
+  int r1, r2, r3, r4;
+  pthread_mutexattr_t p;
+  CERR(r1 = pthread_mutexattr_init(&p), "attr init");
+  CERR(r2 = pthread_mutexattr_setpshared(&p, PTHREAD_PROCESS_SHARED), "attr set");
+  CERR(r3 = pthread_mutex_init(&q->prot, &p), "mutex init failed");
+  CERR(r4 = sem_init(&q->sem, 1, 0), "sem init failed");
+  q->count = 0;
+  return (r1 | r2 | r3 | r4);
+}
+
+int qdestroy(queue_t* q)
+{
+  int r1, r2;
+  CERR(r1 = pthread_mutex_destroy(&q->prot), "qmtx dstr");
+  CERR(r2 = sem_destroy(&q->sem), "qsem dstr");
+  return (r1 | r2);
+}
+
+int qwait(queue_t* q)
+{
+  int r1, r2, r3;
+  CERR(r1 = pthread_mutex_lock(&q->prot), "qmutex lck");
+  q->count++;
+  CERR(r2 = pthread_mutex_unlock(&q->prot), "qmutex ulck");
+  CERR(r3 = sem_wait(&q->sem), "qsem wt");
+  return (r1 | r2 | r3);
+}
+
+int qincr(queue_t* q)
+{
+  int r1, r2;
+  CERR(r1 = pthread_mutex_lock(&q->prot), "qmutex lck");
+  q->count++;
+  CERR(r2 = pthread_mutex_unlock(&q->prot), "qmutex ulck");
+  return (r1 | r2);
+}
+
+int qdecr(queue_t* q)
+{
+  int r1, r2;
+  CERR(r1 = pthread_mutex_lock(&q->prot), "qmutex lck");
+  q->count = q->count - 1;
+  CERR(r2 = pthread_mutex_unlock(&q->prot), "qmutex ulck");
+  return (r1 | r2);
+}
+
+int qget_count(queue_t* q)
+{
+  int c, r1, r2;
+  CERR(r1 = pthread_mutex_lock(&q->prot), "qmutex lck");
+  c = q->count;
+  CERR(r2 = pthread_mutex_unlock(&q->prot), "qmutex ulck");
+  r1 = r1 | r2;
+  return (r1 == 0) ? c : r1;
+}
+
+int qreset(queue_t* q, char has_lock)
+{
+  int r1, r2, r3 = 0;
+  if(!has_lock) {
+    CERR(r1 = pthread_mutex_lock(&q->prot), "qmutex lck");
+  }
+  do {
+    r3 = sem_trywait(&q->sem);
+  } while(r3 != -1);
+  if(!has_lock) {
+    CERR(r2 = pthread_mutex_unlock(&q->prot), "qmutex ulck");
+  }
+  return (r1 | r2);
+
+}
+
+int qrelease(queue_t* q, char has_lock)
+{
+  int r1, r2, r3 = 0;
+  if(!has_lock) {
+    CERR(r1 = pthread_mutex_lock(&q->prot), "qmutex lck");
+  }
+  for(int i = q->count ; i > 0 && r3 == 0; i = i - 1) {
+    CERR(r3 = sem_post(&q->sem), "qmutex pst");
+  }
+//  qreset(q, 1 > 0);
+  if(!has_lock) {
+    CERR(r2 = pthread_mutex_unlock(&q->prot), "qmutex ulck");
+  }
+  return (r1 | r2);
+}
+
+typedef struct protmem {
+  char* mem;
+  pthread_mutex_t prot;
+} protmem_t;
+
+int protmem_init(protmem_t* pr, char* m)
+{
+  int r1;
+  pthread_mutexattr_t p;
+  CERR(pthread_mutexattr_init(&p), "attr init");
+  CERR(pthread_mutexattr_setpshared(&p, PTHREAD_PROCESS_SHARED), "attr set");
+  CERR(r1 = pthread_mutex_init(&pr->prot, &p), "mutex init failed");
+  pr->mem = m;
+  return r1;
+}
+
+int protmem_f(protmem_t* p, int (*f) (char*))
+{
+  int r, r1, r2;
+  CERR(r1 = pthread_mutex_lock(&p->prot), "qmutex lck");
+  r = (*f)(p->mem);
+  CERR(r2 = pthread_mutex_unlock(&p->prot), "qmutex ulck");
+  r1 = r1 | r2;
+  return (r1 == 0) ? r : r1;
+}
+
+int protmem_destroy(protmem_t* p)
+{
+  int r;
+  CERR(r = pthread_mutex_destroy(&p->prot), "protmem dstr");
+  return r;
+}
+
+typedef struct barrier {
+  int max_val;
   char name[256];
-  char released;
+  char _m;
+  protmem_t releasing;
+  queue_t entrance;
+  queue_t exit;
 } barrier_t;
 
 barrier_t* b;
 pid_t* children;
 int n;
+pid_t pid;
 
 
-void sem_unlock(sem_t* t)
-{
-  int r=0;
-  do {
-    fprintf(stderr, ".");
-    fflush(stderr);
-    sem_getvalue(t, &r);
-    sem_post(t);
-  } while(r == 0);
-}
 #define MAX(X,Y) ((X>Y) ? X : Y)
 
 int openSharedMem(const char* name, int* fd, char* existed)
@@ -56,12 +176,12 @@ barrier_t* bopen()
   int fd;
   char existed;
   if(openSharedMem(NAME, &fd, &existed) == -1) {
-    return (barrier_t*)-1;
-  } 
+    return (barrier_t*) - 1;
+  }
   if(!existed) {
     errno = ENOENT;
     shm_unlink(NAME);
-    return (barrier_t*)-1;
+    return (barrier_t*) - 1;
   }
   barrier_t *mem = (barrier_t*) mmap(NULL, sizeof(barrier_t), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
   return mem;
@@ -72,50 +192,63 @@ barrier_t* binit(unsigned int count)
   int fd;
   char existed;
   if(openSharedMem(NAME, &fd, &existed) == -1) {
-    return (barrier_t*)-1;
-  } 
+    return (barrier_t*) - 1;
+  }
   if(existed) {
-    return (barrier_t*)-1;
+    return (barrier_t*) - 1;
   }
   ftruncate(fd, sizeof(struct barrier));
   barrier_t *mem = (barrier_t*) mmap(NULL, sizeof(barrier_t), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
   CERR((long long)mem, "mmap failed");
-  if(mem == (void*)-1) { return (void*) -1; }
-  mem->val = count;
-  mem->cur_val = 0;
+  if(mem == (void*) - 1) {
+    return (void*) - 1;
+  }
+
+  CERR(qinit(&mem->entrance), "qinit entr");
+  CERR(qinit(&mem->exit), "qinit exit");
+  CERR(protmem_init(&mem->releasing, &mem->_m), "protmem r");
+
+  mem->max_val = count;
   strcpy(mem->name, NAME);
-  pthread_mutexattr_t p;
-  CERR(pthread_mutexattr_init(&p), "attr init");
-  CERR(pthread_mutexattr_setpshared(&p, PTHREAD_PROCESS_SHARED), "attr set");
-  CERR(pthread_mutex_init(&mem->valSem, &p), "mutex init failed");
-  CERR(sem_init(&mem->sem, 1, 0), "sem init failed");
-  mem->released = (char) 1 < 0;
   return mem;
+}
+
+int get1B(char* mem)
+{
+  return (int) * mem;
+}
+
+#define TRUE (1>0)
+#define FALSE (1<0)
+
+int set1BTrue(char* mem)
+{
+  return (*mem = TRUE);
+}
+
+int set1BFalse(char* mem)
+{
+  return (*mem = FALSE);
 }
 
 int bwait(barrier_t* b)
 {
-  //printf("  bwait..\n");
-
-  //printf(" %d on release..\n", getpid());
-  while(b->released) {
-    //sem_wait(&b->sem);
+  while(protmem_f(&b->releasing, &get1B) == (int) TRUE ) {
+    //qwait(&b->entrance);
     usleep(100);
   }
 
-  pthread_mutex_lock(&b->valSem);
-  b->cur_val++;
-  pthread_mutex_unlock(&b->valSem);
+  qincr(&b->exit);
 
   //printf("   barrier val: %d, needed %d (%d)\n", b->cur_val, b->val, getpid());
 
-  if(b->cur_val == b->val) {
+  if(qget_count(&b->exit) == b->max_val) {
    // printf("..opening.. (%d)\n", getpid());
-    b->released = 1 > 0;
+    protmem_f(&b->releasing, &set1BTrue);
   //  sem_unlock(&b->sem);
   } else {
     //printf(" %d on not release..\n", getpid());
-    while(!b->released) {
+    while(protmem_f(&b->releasing, &get1B) == (int) FALSE) {
       //sem_wait(&b->sem);
       usleep(100);
     }
@@ -123,56 +256,66 @@ int bwait(barrier_t* b)
 
   //sem_unlock(&b->sem);
 
-  pthread_mutex_lock(&b->valSem);
-  b->cur_val = b->cur_val - 1;
-  pthread_mutex_unlock(&b->valSem);
-  
-  if(b->cur_val == 0) {
-    b->released = 1 < 0;
+  qdecr(&b->exit);
+
+  if(qget_count(&b->exit) == 0) {
+    protmem_f(&b->releasing, &set1BFalse);
     //sem_unlock(&b->sem);
   }
-
-  return 0;
-
   /*
-  printf("  bwait..\n");
-  CERR(pthread_mutex_lock(&b->valSem), "sem wait failed");
-  b->cur_val++;
-  printf("barrier val: %d, needed %d\n", b->cur_val, b->val);
-
-  if(b->cur_val == b->val) {
-    printf("Opening barrier..\n");
-    // To avoid race during (and for) opening, valSem is left locked and opened after all posts
-    // to sem.
-    for (b->cur_val = b->cur_val - 1; b->cur_val > 0; b->cur_val = b->cur_val - 1) {
-      CERR(sem_post(&b->sem), "sem post failed");
-    }
-    CERR(pthread_mutex_unlock(&b->valSem), "sem post failed");
-  } else {
-    CERR(pthread_mutex_unlock(&b->valSem), "sem post failed");
-    //potential race: cur_val takes into account this thread, but it's not currently waiting
-    //using semaphore should fix it, as it counts posts
-    CERR(sem_wait(&b->sem), "sem wait failed");
-    printf(" done waiting..\n");
+  //check if barrier is being currently released
+  while(protmem_f(&b->releasing, &get1B) == (int)(1 > 0)) {
+    //if yes, wait till it's done
+    printf(" %d waiting for entrance\n", (int)pid);
+    CERR(qwait(&b->entrance), "bwait entr");
   }
-  return 0;
+  qdecr(&b->entrance);
+  printf("  %d done waiting for entrance\n", (int)pid);
+  //proceed to enter
+  CERR(pthread_mutex_lock(&b->exit.prot), "bwait exit lck");
+  if(b->exit.count ==  b->max_val - 1) {
+    //if yes, make sure no one will interrupt
+    printf("%d releasing..\n-------------------------------------\n", (int)pid);
+    protmem_f(&b->releasing, &set1BTrue);
+    printf("  ..exit\n");
+    protmem_f(&b->releasing, &set1BFalse);
+    printf("  ..entrance\n");
+    qrelease(&b->entrance, 1 < 0);
+    qrelease(&b->exit, 1 > 0);
+    CERR(pthread_mutex_unlock(&b->exit.prot), "bwait exit ulck");
+    printf("done releasing\n");
+    while(qget_count(&b->exit) > 0 && qget_count(&b->entrance) > 0) {
+      printf(".");
+      fflush(stdout);
+      usleep(10000);
+    }
+  } else {
+    b->exit.count++;
+    CERR(pthread_mutex_unlock(&b->exit.prot), "bwait exit ulck");
+    printf(" %d waiting for exit\n", (int)pid);
+    CERR(sem_wait(&b->exit.sem), "bwait sem wait");
+    qdecr(&b->exit);
+    printf("  %d done waiting for exit\n", (int)pid);
+  }
   */
+  return 0;
 }
 
 int bdestroy(barrier_t* b)
 {
-  pthread_mutex_destroy(&b->valSem);
-  sem_destroy(&b->sem);
+  CERR(qdestroy(&b->entrance), "bdstr entr");
+  CERR(qdestroy(&b->exit), "bdstr exit");
+  CERR(protmem_destroy(&b->releasing), "bdstr rel");
   char buf[256];
-  strcpy(buf,b->name);
-  CERR(munmap((void*) b, sizeof(struct barrier)), "munmap failed");
-  CERR(shm_unlink(buf), "shm unlink failed");
+  strcpy(buf, b->name);
+  CERR(munmap((void*) b, sizeof(struct barrier)), "bdstr munmap");
+  CERR(shm_unlink(buf), "bdstr shm_unlink");
   return 0;
 }
 
 void printPid(int sig __attribute__((unused)))
 {
-  fprintf(stderr, "-->pid %d closing\n", getpid()); 
+  fprintf(stderr, "-->pid %d closing\n", pid);
   _exit(EXIT_FAILURE);
 }
 
@@ -189,42 +332,48 @@ void tidyUp(int sig)
 #ifdef DEBUG
 int main(int argc, char* const argv[])
 {
-  int t=0, n=4; 
-  int opt=0;
+  int t = 0, n = 4;
+  int opt = 0;
   while((opt = getopt(argc, argv, "t:n:")) != -1) {
     switch(opt) {
-      case 't':
-        t = atoi(optarg);
-        break;
-      case 'n':
-        n = atoi(optarg);
-        break;
-      default:
-        puts("unknown option");
-        break;
+    case 't':
+      t = atoi(optarg);
+      break;
+    case 'n':
+      n = atoi(optarg);
+      break;
+    default:
+      puts("unknown option");
+      break;
     }
   }
   switch(t) {
-    case 0:
-      b = binit(n);
-      CERR((long long)b, "binit failed");
-      if (b == (void*)-1) { return EXIT_FAILURE; }
-      printf("Initiated barrier.\n");
-      break;
-    case 1:
-      b = bopen();
-      CERR((long long)b, "bopen failed");
-      if (b == (void*)-1) { return EXIT_FAILURE; }
-      printf("%d started waiting..\n", getpid());
-      bwait(b);
-      printf("%d done waiting..\n", getpid());
-      break;
-    case 2:
-      b = bopen();
-      CERR((long long)b, "bopen failed");
-      if (b == (void*)-1) { return EXIT_FAILURE; }
-      bdestroy(b);
-      printf("Destroyed barrier\n");
+  case 0:
+    b = binit(n);
+    CERR((long long)b, "binit failed");
+    if (b == (void*) - 1) {
+      return EXIT_FAILURE;
+    }
+    printf("Initiated barrier.\n");
+    break;
+  case 1:
+    b = bopen();
+    CERR((long long)b, "bopen failed");
+    if (b == (void*) - 1) {
+      return EXIT_FAILURE;
+    }
+    printf("%d started waiting..\n", getpid());
+    bwait(b);
+    printf("%d done waiting..\n", getpid());
+    break;
+  case 2:
+    b = bopen();
+    CERR((long long)b, "bopen failed");
+    if (b == (void*) - 1) {
+      return EXIT_FAILURE;
+    }
+    bdestroy(b);
+    printf("Destroyed barrier\n");
   }
   return 0;
 }
@@ -238,26 +387,28 @@ int main(int argc, char* const argv[])
 {
   int m = 4;
   n = 10;
-  if(getopt(argc,argv,"n:") == 'n') {
+  if(getopt(argc, argv, "n:") == 'n') {
     n = atoi(optarg);
   }
-  children = (pid_t*)malloc(n*sizeof(pid_t));
+  children = (pid_t*)malloc(n * sizeof(pid_t));
   b = binit(n);
   CERR((long long)b, "binit failed");
-  if(b == (barrier_t*)-1) { return EXIT_FAILURE; }
-  int r=1;
+  if(b == (barrier_t*) - 1) {
+    return EXIT_FAILURE;
+  }
+  int r = 1;
   for (int i = 0; i < n && r > 0; i++) {
     CERR(r = fork(), "fork failed");
-    if(r!=0) {
+    if(r != 0) {
       children[i] = r;
     }
   }
   if(r == 0) {
-    pid_t pid = getpid();
+    pid = getpid();
     signal(SIGINT, &printPid);
     for (int i = 0; i < m; i++) {
       bwait(b);
-      delay(1000,10);
+      delay(1000, 10);
       printf(" pid %d run %d\n", pid, i);
     }
     printPid(0);
@@ -269,7 +420,7 @@ int main(int argc, char* const argv[])
       wait(&r);
     }
     tidyUp(0);
-  } 
+  }
   return 0;
 }
 #endif
