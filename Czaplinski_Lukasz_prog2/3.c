@@ -137,6 +137,7 @@ typedef struct barrier {
   protmem_t releasing;
   queue_t entrance;
   queue_t exit;
+  queue_t critical;
 } barrier_t;
 
 barrier_t* b;
@@ -206,6 +207,7 @@ barrier_t* binit(unsigned int count)
 
   CERR(qinit(&mem->entrance), "qinit entr");
   CERR(qinit(&mem->exit), "qinit exit");
+  CERR(qinit(&mem->critical), "qinit critical");
   CERR(protmem_init(&mem->releasing, &mem->_m), "protmem r");
 
   mem->max_val = count;
@@ -234,70 +236,36 @@ int set1BFalse(char* mem)
 int bwait(barrier_t* b)
 {
   while(protmem_f(&b->releasing, &get1B) == (int) TRUE ) {
-    //qwait(&b->entrance);
-    usleep(100);
+    qwait(&b->entrance);
+    //usleep(100);
   }
 
-  qincr(&b->exit);
+  qincr(&b->critical);
 
-  //printf("   barrier val: %d, needed %d (%d)\n", b->cur_val, b->val, getpid());
+  //printf("   barrier val: %d (%d)\n", qget_count(&b->critical), pid);
 
-  if(qget_count(&b->exit) == b->max_val) {
+  if(qget_count(&b->critical) == b->max_val) {
    // printf("..opening.. (%d)\n", getpid());
     protmem_f(&b->releasing, &set1BTrue);
+    qrelease(&b->exit, FALSE);
   //  sem_unlock(&b->sem);
   } else {
     //printf(" %d on not release..\n", getpid());
     while(protmem_f(&b->releasing, &get1B) == (int) FALSE) {
-      //sem_wait(&b->sem);
-      usleep(100);
+      qwait(&b->exit);
+      //usleep(100);
     }
   }
 
   //sem_unlock(&b->sem);
 
-  qdecr(&b->exit);
+  qdecr(&b->critical);
 
-  if(qget_count(&b->exit) == 0) {
+  if(qget_count(&b->critical) == 0) {
     protmem_f(&b->releasing, &set1BFalse);
+    qrelease(&b->entrance, FALSE);
     //sem_unlock(&b->sem);
   }
-  /*
-  //check if barrier is being currently released
-  while(protmem_f(&b->releasing, &get1B) == (int)(1 > 0)) {
-    //if yes, wait till it's done
-    printf(" %d waiting for entrance\n", (int)pid);
-    CERR(qwait(&b->entrance), "bwait entr");
-  }
-  qdecr(&b->entrance);
-  printf("  %d done waiting for entrance\n", (int)pid);
-  //proceed to enter
-  CERR(pthread_mutex_lock(&b->exit.prot), "bwait exit lck");
-  if(b->exit.count ==  b->max_val - 1) {
-    //if yes, make sure no one will interrupt
-    printf("%d releasing..\n-------------------------------------\n", (int)pid);
-    protmem_f(&b->releasing, &set1BTrue);
-    printf("  ..exit\n");
-    protmem_f(&b->releasing, &set1BFalse);
-    printf("  ..entrance\n");
-    qrelease(&b->entrance, 1 < 0);
-    qrelease(&b->exit, 1 > 0);
-    CERR(pthread_mutex_unlock(&b->exit.prot), "bwait exit ulck");
-    printf("done releasing\n");
-    while(qget_count(&b->exit) > 0 && qget_count(&b->entrance) > 0) {
-      printf(".");
-      fflush(stdout);
-      usleep(10000);
-    }
-  } else {
-    b->exit.count++;
-    CERR(pthread_mutex_unlock(&b->exit.prot), "bwait exit ulck");
-    printf(" %d waiting for exit\n", (int)pid);
-    CERR(sem_wait(&b->exit.sem), "bwait sem wait");
-    qdecr(&b->exit);
-    printf("  %d done waiting for exit\n", (int)pid);
-  }
-  */
   return 0;
 }
 
