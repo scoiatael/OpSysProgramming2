@@ -44,4 +44,7 @@ void delay(int r, int m)
   CERR(nanosleep(&nSleepTime, &nSleepTime), "nanosleep");
 }
 
+#define TRUE (1>0)
+#define FALSE (1<0)
+
 #endif /* end of include guard: COMMON_H */

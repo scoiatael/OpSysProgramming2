@@ -19,22 +19,42 @@ int qinit(queue_t* q)
   return (r1 | r2 | r3 | r4);
 }
 
+int qrelease(queue_t* q, char has_lock)
+{
+  int r1, r2, r3 = 0;
+  if(!has_lock) {
+    CERR(r1 = pthread_mutex_lock(&q->prot), "qmutex lck");
+  }
+  for(int i = q->count ; i > 0 && r3 == 0; i = i - 1) {
+    CERR(r3 = sem_post(&q->sem), "qmutex pst");
+  }
+//  qreset(q, 1 > 0);
+  if(!has_lock) {
+    CERR(r2 = pthread_mutex_unlock(&q->prot), "qmutex ulck");
+  }
+  return (r1 | r2);
+}
+
 int qdestroy(queue_t* q)
 {
-  int r1, r2;
+  int r1, r2,r3;
+  r3 = qrelease(q, FALSE);
   CERR(r1 = pthread_mutex_destroy(&q->prot), "qmtx dstr");
   CERR(r2 = sem_destroy(&q->sem), "qsem dstr");
-  return (r1 | r2);
+  return (r1 | r2 | r3);
 }
 
 int qwait(queue_t* q)
 {
-  int r1, r2, r3;
+  int r1, r2, r3, r4, r5;
   CERR(r1 = pthread_mutex_lock(&q->prot), "qmutex lck");
   q->count++;
   CERR(r2 = pthread_mutex_unlock(&q->prot), "qmutex ulck");
   CERR(r3 = sem_wait(&q->sem), "qsem wt");
-  return (r1 | r2 | r3);
+  CERR(r4 = pthread_mutex_lock(&q->prot), "qmutex lck");
+  q->count = q->count - 1;
+  CERR(r5 = pthread_mutex_unlock(&q->prot), "qmutex ulck");
+  return (r1 | r2 | r3 | r4 | r5);
 }
 
 int qincr(queue_t* q)
@@ -79,22 +99,6 @@ int qreset(queue_t* q, char has_lock)
   }
   return (r1 | r2);
 
-}
-
-int qrelease(queue_t* q, char has_lock)
-{
-  int r1, r2, r3 = 0;
-  if(!has_lock) {
-    CERR(r1 = pthread_mutex_lock(&q->prot), "qmutex lck");
-  }
-  for(int i = q->count ; i > 0 && r3 == 0; i = i - 1) {
-    CERR(r3 = sem_post(&q->sem), "qmutex pst");
-  }
-//  qreset(q, 1 > 0);
-  if(!has_lock) {
-    CERR(r2 = pthread_mutex_unlock(&q->prot), "qmutex ulck");
-  }
-  return (r1 | r2);
 }
 
 typedef struct protmem {
@@ -219,9 +223,6 @@ int get1B(char* mem)
 {
   return (int) * mem;
 }
-
-#define TRUE (1>0)
-#define FALSE (1<0)
 
 int set1BTrue(char* mem)
 {
